@@ -3,6 +3,12 @@ import dotenv from 'dotenv';
 import axios from 'axios';
 import querystring from 'querystring';
 
+import fs from 'fs';
+
+function readTokens() {
+  return JSON.parse(fs.readFileSync('./tokens.json', 'utf8'));
+}
+
 dotenv.config();
 const app = express();
 app.use(express.json());
@@ -57,11 +63,41 @@ app.get('/callback', async (req, res) => {
   }
 });
 
-// Optional: webhook test endpoint
-app.post('/webhooks/qbo', (req, res) => {
+app.post('/webhooks/qbo', async (req, res) => {
   console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
-  res.sendStatus(200);
+
+  const { access_token: accessToken, realmId } = readTokens();
+
+
+  try {
+    const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
+
+    for (const event of invoiceEvents) {
+      if (event.name === 'Invoice' && event.operation === 'Create') {
+        const invoiceId = event.id;
+
+        const response = await axios.get(
+          `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
+          {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json'
+            }
+          }
+        );
+
+        const invoice = response.data;
+        console.log('📄 Full Invoice:', JSON.stringify(invoice, null, 2));
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Failed to fetch invoice:', err.response?.data || err.message);
+    res.status(500).send('Failed to handle webhook');
+  }
 });
+
 
 app.get('/', (req, res) => {
   res.send('QBO Webhook App is running');
