@@ -2,6 +2,7 @@ import express from 'express';
 import dotenv from 'dotenv';
 import axios from 'axios';
 import querystring from 'querystring';
+import { connectToMongo } from './mongo.js';
 
 import fs from 'fs';
 
@@ -158,3 +159,24 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`🚀 Server listening on port ${PORT}`);
 });
+
+
+
+app.post('/api/quotes', async (req, res) => {
+  try {
+    const db = await connectToMongo();
+    const quote = {
+      ...req.body,
+      createdAt: new Date()
+    };
+
+    await db.collection('quotes').insertOne(quote);
+
+    console.log('✅ Quote saved:', quote.customerEmail || '[no email]');
+    res.status(200).send('Quote received and saved');
+  } catch (err) {
+    console.error('❌ Failed to save quote:', err.message);
+    res.status(500).send('Error saving quote');
+  }
+});
+
