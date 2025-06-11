@@ -9,6 +9,35 @@ function readTokens() {
   return JSON.parse(fs.readFileSync('./tokens.json', 'utf8'));
 }
 
+async function refreshTokens(refresh_token) {
+  const basicAuth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+
+  const response = await axios.post(tokenUrl, querystring.stringify({
+    grant_type: 'refresh_token',
+    refresh_token
+  }), {
+    headers: {
+      Authorization: `Basic ${basicAuth}`,
+      'Content-Type': 'application/x-www-form-urlencoded'
+    }
+  });
+
+  const updated = response.data;
+
+  // Update the token file
+  const current = readTokens();
+  const newData = {
+    ...current,
+    access_token: updated.access_token,
+    refresh_token: updated.refresh_token || current.refresh_token // use new if provided
+  };
+
+  fs.writeFileSync('./tokens.json', JSON.stringify(newData, null, 2));
+  console.log('🔄 Access token refreshed.');
+
+  return newData.access_token;
+}
+
 dotenv.config();
 const app = express();
 app.use(express.json());
@@ -65,17 +94,17 @@ app.get('/callback', async (req, res) => {
 
 app.post('/webhooks/qbo', async (req, res) => {
   console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
+let { access_token: accessToken, refresh_token, realmId } = readTokens();
 
-  const { access_token: accessToken, realmId } = readTokens();
+// Try the API call, refresh if token is invalid
+try {
+  const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
 
+  for (const event of invoiceEvents) {
+    if (event.name === 'Invoice' && event.operation === 'Create') {
+      const invoiceId = event.id;
 
-  try {
-    const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
-
-    for (const event of invoiceEvents) {
-      if (event.name === 'Invoice' && event.operation === 'Create') {
-        const invoiceId = event.id;
-
+      try {
         const response = await axios.get(
           `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
           {
@@ -88,14 +117,36 @@ app.post('/webhooks/qbo', async (req, res) => {
 
         const invoice = response.data;
         console.log('📄 Full Invoice:', JSON.stringify(invoice, null, 2));
+      } catch (err) {
+        if (err.response?.status === 401) {
+          console.log('🔁 Token expired, refreshing...');
+          accessToken = await refreshTokens(refresh_token);
+
+          // Retry the request
+          const retry = await axios.get(
+            `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json'
+              }
+            }
+          );
+
+          const invoice = retry.data;
+          console.log('📄 Full Invoice (after refresh):', JSON.stringify(invoice, null, 2));
+        } else {
+          throw err;
+        }
       }
     }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error('❌ Failed to fetch invoice:', err.response?.data || err.message);
-    res.status(500).send('Failed to handle webhook');
   }
+
+  res.sendStatus(200);
+} catch (err) {
+  console.error('❌ Failed to handle invoice event:', err.response?.data || err.message);
+  res.status(500).send('Webhook failed');
+}
 });
 
 
