@@ -48,6 +48,7 @@ const {
   CLIENT_SECRET,
   REDIRECT_URI,
   ENVIRONMENT
+  
 } = process.env;
 
 const tokenUrl = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
@@ -163,20 +164,38 @@ app.listen(PORT, () => {
 
 
 app.post('/api/quotes', async (req, res) => {
+  const { customerName, customerEmail, siteAddress, date, products } = req.body;
+
   try {
     const db = await connectToMongo();
-    const quote = {
-      ...req.body,
-      createdAt: new Date()
-    };
 
-    await db.collection('quotes').insertOne(quote);
+    // 1. Insert or get customer
+    let customer = await db.collection('customers').findOne({ email: customerEmail });
+    if (!customer) {
+      const result = await db.collection('customers').insertOne({ name: customerName, email: customerEmail });
+      customer = { _id: result.insertedId, name: customerName, email: customerEmail };
+    }
 
-    console.log('✅ Quote saved:', quote.customerEmail || '[no email]');
-    res.status(200).send('Quote received and saved');
+    // 2. Insert or get site
+    let site = await db.collection('sites').findOne({ customerId: customer._id, address: siteAddress });
+    if (!site) {
+      const result = await db.collection('sites').insertOne({ customerId: customer._id, address: siteAddress });
+      site = { _id: result.insertedId, customerId: customer._id, address: siteAddress };
+    }
+
+    // 3. Insert quote
+    await db.collection('quotes').insertOne({
+      siteId: site._id,
+      date,
+      products
+    });
+
+    console.log(`✅ Quote stored for ${customerEmail} on ${date}`);
+    res.status(200).send('Quote saved');
   } catch (err) {
-    console.error('❌ Failed to save quote:', err.message);
-    res.status(500).send('Error saving quote');
+    console.error('❌ Quote saving failed:', err.message);
+    res.status(500).send('Failed to save quote');
   }
 });
+
 
