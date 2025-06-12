@@ -10,7 +10,8 @@ const client = new MongoClient(uri, {
     version: ServerApiVersion.v1,
     strict: true,
     deprecationErrors: true,
-  }
+  },
+    tls: true // ✅ Force TLS (critical for Render + Atlas)
 });
 
 let cachedDb = null;
