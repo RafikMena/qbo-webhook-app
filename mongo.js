@@ -13,7 +13,7 @@ export async function connectToMongo() {
 
   try {
     await client.connect();
-    const db = client.db('quickbooks'); // matches your MongoDB database name
+    db = client.db('qbo-webhook-app'); // explicitly use your DB name
     cachedDb = db;
     console.log('✅ Connected to MongoDB');
     return db;
