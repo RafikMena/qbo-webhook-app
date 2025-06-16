@@ -219,7 +219,13 @@ app.post('/webhooks/qbo', async (req, res) => {
           });
           console.log('✅ Invoice updated with quote prices');
         } catch (err) {
-          console.error('❌ Failed to update invoice:', err.response?.data || err.message);
+          const fault = err.response?.data?.fault;
+          if (fault) {
+            console.error('❌ QuickBooks error:');
+            console.error(JSON.stringify(fault, null, 2));
+          } else {
+            console.error('❌ Failed to update invoice:', err.response?.data || err.message);
+          }
         }
       }
     }
