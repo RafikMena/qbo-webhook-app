@@ -98,6 +98,7 @@ app.get('/callback', async (req, res) => {
 
   try {
     const basicAuth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+  console.log('🔐 Tokens:', JSON.stringify(tokens, null, 2));
 
     const response = await axios.post(tokenUrl, querystring.stringify({
       grant_type: 'authorization_code',
