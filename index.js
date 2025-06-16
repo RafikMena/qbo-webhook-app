@@ -92,13 +92,11 @@ app.get('/connect', (req, res) => {
   res.redirect(redirect);
 });
 
-// Step 2: Handle QuickBooks callback
 app.get('/callback', async (req, res) => {
   const authCode = req.query.code;
 
   try {
     const basicAuth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
-  console.log('🔐 Tokens:', JSON.stringify(tokens, null, 2));
 
     const response = await axios.post(tokenUrl, querystring.stringify({
       grant_type: 'authorization_code',
@@ -112,6 +110,9 @@ app.get('/callback', async (req, res) => {
     });
 
     const tokens = response.data;
+    console.log('🔐 TOKENS TO COPY:', JSON.stringify(tokens, null, 2)); // 👈 Copy from Render logs
+
+    fs.writeFileSync('./tokens.json', JSON.stringify(tokens, null, 2));
 
     res.send('Authorization complete. Tokens received. ✅');
   } catch (err) {
@@ -119,6 +120,7 @@ app.get('/callback', async (req, res) => {
     res.status(500).send('Auth failed');
   }
 });
+
 
 app.post('/webhooks/qbo', async (req, res) => {
   console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
