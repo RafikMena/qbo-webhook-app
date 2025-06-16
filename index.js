@@ -9,7 +9,6 @@ dotenv.config();
 const app = express();
 app.use(express.json());
 
-console.log(`🧭 QBO Mode: ${ENVIRONMENT}`);
 
 const {
   CLIENT_ID,
@@ -28,6 +27,9 @@ const authUrl = `${authBase}/connect/oauth2`;
 const apiBase = ENVIRONMENT === 'sandbox'
   ? 'https://sandbox-quickbooks.api.intuit.com'
   : 'https://quickbooks.api.intuit.com';
+
+
+console.log(`🧭 QBO Mode: ${ENVIRONMENT}`);
 
 
 function normalizeProductName(raw) {
