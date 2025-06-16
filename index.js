@@ -422,9 +422,6 @@ app.get('/', (req, res) => {
   res.send('QBO Webhook App is running');
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server listening on port ${PORT}`);
-});
 
 app.post('/api/quotes', async (req, res) => {
   const { customerName, customerEmail, siteAddress, date, products } = req.body;
