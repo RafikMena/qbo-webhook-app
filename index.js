@@ -18,11 +18,9 @@ const {
 } = process.env;
 const tokenUrl = 'https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer';
 
-const authBase = ENVIRONMENT === 'sandbox'
-  ? 'https://sandbox.qbo.intuit.com'
-  : 'https://app.qbo.intuit.com';
 
-const authUrl = `${authBase}/connect/oauth2`;
+
+const authUrl = 'https://appcenter.intuit.com/connect/oauth2'; // ✅ always correct
 
 const apiBase = ENVIRONMENT === 'sandbox'
   ? 'https://sandbox-quickbooks.api.intuit.com'
