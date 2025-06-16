@@ -84,8 +84,6 @@ app.get('/callback', async (req, res) => {
     });
 
     const tokens = response.data;
-    console.log('✅ Access Token:', tokens.access_token);
-    console.log('🛠 Refresh Token:', tokens.refresh_token);
 
     res.send('Authorization complete. Tokens received. ✅');
   } catch (err) {
@@ -96,36 +94,18 @@ app.get('/callback', async (req, res) => {
 
 app.post('/webhooks/qbo', async (req, res) => {
   console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
-let { access_token: accessToken, refresh_token, realmId } = readTokens();
+  let { access_token: accessToken, refresh_token, realmId } = readTokens();
 
-// Try the API call, refresh if token is invalid
-try {
-  const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
+  try {
+    const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
 
-  for (const event of invoiceEvents) {
-    if (event.name === 'Invoice' && event.operation === 'Create') {
-      const invoiceId = event.id;
+    for (const event of invoiceEvents) {
+      if (event.name === 'Invoice' && event.operation === 'Create') {
+        const invoiceId = event.id;
 
-      try {
-        const response = await axios.get(
-          `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
-          {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              Accept: 'application/json'
-            }
-          }
-        );
-
-        const invoice = response.data;
-        console.log('📄 Full Invoice:', JSON.stringify(invoice, null, 2));
-      } catch (err) {
-        if (err.response?.status === 401) {
-          console.log('🔁 Token expired, refreshing...');
-          accessToken = await refreshTokens(refresh_token);
-
-          // Retry the request
-          const retry = await axios.get(
+        let invoice;
+        try {
+          const response = await axios.get(
             `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
             {
               headers: {
@@ -134,22 +114,73 @@ try {
               }
             }
           );
-
-          const invoice = retry.data;
-          console.log('📄 Full Invoice (after refresh):', JSON.stringify(invoice, null, 2));
-        } else {
-          throw err;
+          invoice = response.data;
+          console.log('📄 Full Invoice:', JSON.stringify(invoice, null, 2));
+        } catch (err) {
+          if (err.response?.status === 401) {
+            console.log('🔁 Token expired, refreshing...');
+            accessToken = await refreshTokens(refresh_token);
+            const retry = await axios.get(
+              `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice/${invoiceId}`,
+              {
+                headers: {
+                  Authorization: `Bearer ${accessToken}`,
+                  Accept: 'application/json'
+                }
+              }
+            );
+            invoice = retry.data;
+            console.log('📄 Full Invoice (after refresh):', JSON.stringify(invoice, null, 2));
+          } else {
+            throw err;
+          }
         }
+
+        // ✅ Proceed to match invoice to quote
+        const db = await connectToMongo();
+        const customerName = invoice.Invoice.CustomerRef?.name;
+        const siteAddress = invoice.Invoice.BillAddr?.Line1;
+        const txnDate = invoice.Invoice.TxnDate;
+
+        if (!customerName || !siteAddress || !txnDate) {
+          console.warn('⚠️ Missing required fields in invoice:', { customerName, siteAddress, txnDate });
+          continue;
+        }
+
+        const customer = await db.collection('customers').findOne({ name: customerName });
+        if (!customer) {
+          console.warn(`⚠️ No customer found for ${customerName}`);
+          continue;
+        }
+
+        const site = await db.collection('sites').findOne({ customerId: customer._id, address: siteAddress });
+        if (!site) {
+          console.warn(`⚠️ No site found for address: ${siteAddress}`);
+          continue;
+        }
+
+        const quote = await db.collection('quotes').findOne({
+          siteId: site._id,
+          date: txnDate
+        });
+
+        if (!quote) {
+          console.warn(`⚠️ No quote found for ${txnDate} at ${siteAddress}`);
+          continue;
+        }
+
+        console.log('✅ Matched quote:', JSON.stringify(quote, null, 2));
+        // 👉 optional: enrich invoice, log, or create follow-up action
       }
     }
-  }
 
-  res.sendStatus(200);
-} catch (err) {
-  console.error('❌ Failed to handle invoice event:', err.response?.data || err.message);
-  res.status(500).send('Webhook failed');
-}
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Failed to handle invoice event:', err.response?.data || err.message);
+    res.status(500).send('Webhook failed');
+  }
 });
+
 
 
 app.get('/', (req, res) => {
