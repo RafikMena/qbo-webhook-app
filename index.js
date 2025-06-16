@@ -6,6 +6,33 @@ import { connectToMongo } from './mongo.js';
 
 import fs from 'fs';
 
+
+function normalizeProductName(raw) {
+  if (!raw) return '';
+
+  const input = raw.toLowerCase().trim();
+
+  // Map of aliases to normalized names
+  const aliasMap = [
+    { pattern: /\b(87|unl|regular)\b/, normalized: '87' },
+    { pattern: /\b(89)\b/, normalized: '89' },
+    { pattern: /\b(91|premium)\b/, normalized: '91' },
+    { pattern: /\b(rd99|renewable\s*diesel|rd\s*99)\b/, normalized: 'RD99' },
+    { pattern: /\b(b20)\b/, normalized: 'B20' },
+    { pattern: /\b(carb\s*diesel)\b/, normalized: 'CARB Diesel' },
+  ];
+
+  for (const { pattern, normalized } of aliasMap) {
+    if (pattern.test(input)) {
+      return normalized;
+    }
+  }
+
+  // Fallback: return trimmed original
+  return raw.trim();
+}
+
+
 function readTokens() {
   return JSON.parse(fs.readFileSync('./tokens.json', 'utf8'));
 }
@@ -171,6 +198,57 @@ app.post('/webhooks/qbo', async (req, res) => {
 
         console.log('✅ Matched quote:', JSON.stringify(quote, null, 2));
         // 👉 optional: enrich invoice, log, or create follow-up action
+
+        const updatedLineItems = [];
+
+        for (const line of invoice.Invoice.Line || []) {
+          const itemName = normalizeProductName(line?.SalesItemLineDetail?.ItemRef?.name || '');
+          const matched = quote.products.find(p => normalizeProductName(p.name) === itemName);
+
+          if (!matched) {
+            console.warn(`❌ No matching product for "${itemName}" in quote`);
+            continue;
+          }
+
+          const unitPrice = matched.price;
+          const qty = line.SalesItemLineDetail?.Qty || 1;
+
+          updatedLineItems.push({
+            Amount: parseFloat((unitPrice * qty).toFixed(2)),
+            DetailType: 'SalesItemLineDetail',
+            SalesItemLineDetail: {
+              ItemRef: line.SalesItemLineDetail.ItemRef,
+              Qty: qty,
+              UnitPrice: unitPrice
+            }
+          });
+        }
+        if (updatedLineItems.length > 0) {
+        try {
+          const patchResponse = await axios.post(
+            `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice?operation=update`,
+            {
+              Id: invoice.Invoice.Id,
+              SyncToken: invoice.Invoice.SyncToken,
+              Line: updatedLineItems
+            },
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json'
+              }
+            }
+          );
+          console.log('✅ Invoice updated with quote prices');
+        } catch (err) {
+          console.error('❌ Failed to update invoice:', err.response?.data || err.message);
+        }
+      } else {
+        console.warn('⚠️ No matching products found to update invoice');
+      }
+
+
       }
     }
 
