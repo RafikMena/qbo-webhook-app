@@ -245,7 +245,7 @@ app.post('/webhooks/qbo', async (req, res) => {
           );
           console.log('✅ Invoice updated with quote prices');
         } catch (err) {
-          console.error('❌ Failed to update invoice:', err.response?.data || err.message);
+            console.error('❌ Failed to update invoice:', JSON.stringify(err.response?.data, null, 2) || err.message);
         }
       } else {
         console.warn('⚠️ No matching products found to update invoice');
