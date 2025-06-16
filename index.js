@@ -101,3 +101,169 @@ app.get('/callback', async (req, res) => {
     res.status(500).send('Auth failed');
   }
 });
+
+// Webhook for QuickBooks invoice creation
+app.post('/webhooks/qbo', async (req, res) => {
+  console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
+  let { access_token: accessToken, refresh_token, realmId } = readTokens();
+
+  try {
+    const invoiceEvents = req.body.eventNotifications?.[0]?.dataChangeEvent?.entities || [];
+
+    for (const event of invoiceEvents) {
+      if (event.name === 'Invoice' && event.operation === 'Create') {
+        const invoiceId = event.id;
+        let invoice;
+
+        try {
+          const response = await axios.get(`${apiBase}/v3/company/${realmId}/invoice/${invoiceId}`, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json'
+            }
+          });
+          invoice = response.data;
+        } catch (err) {
+          if (err.response?.status === 401) {
+            console.log('🔁 Token expired, refreshing...');
+            accessToken = await refreshTokens(refresh_token);
+            const retry = await axios.get(`${apiBase}/v3/company/${realmId}/invoice/${invoiceId}`, {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json'
+              }
+            });
+            invoice = retry.data;
+          } else {
+            throw err;
+          }
+        }
+
+        const db = await connectToMongo();
+        const customerName = invoice.Invoice.CustomerRef?.name;
+        const siteAddress = invoice.Invoice.BillAddr?.Line1;
+        const txnDate = invoice.Invoice.TxnDate;
+
+        if (!customerName || !siteAddress || !txnDate) {
+          console.warn('⚠️ Missing required fields in invoice:', { customerName, siteAddress, txnDate });
+          continue;
+        }
+
+        const customer = await db.collection('customers').findOne({ name: customerName });
+        if (!customer) {
+          console.warn(`⚠️ No customer found for ${customerName}`);
+          continue;
+        }
+
+        const site = await db.collection('sites').findOne({ customerId: customer._id, address: siteAddress });
+        if (!site) {
+          console.warn(`⚠️ No site found for address: ${siteAddress}`);
+          continue;
+        }
+
+        const quote = await db.collection('quotes').findOne({
+          siteId: site._id,
+          date: txnDate
+        });
+
+        if (!quote) {
+          console.warn(`⚠️ No quote found for ${txnDate} at ${siteAddress}`);
+          continue;
+        }
+
+        const updatedLineItems = [];
+
+        for (const line of invoice.Invoice.Line || []) {
+          const itemName = normalizeProductName(line?.SalesItemLineDetail?.ItemRef?.name || '');
+          const matched = quote.products.find(p => normalizeProductName(p.name) === itemName);
+
+          if (!matched) {
+            console.warn(`❌ No matching product for "${itemName}" in quote`);
+            continue;
+          }
+
+          const unitPrice = matched.price;
+          const qty = line.SalesItemLineDetail?.Qty || 1;
+
+          updatedLineItems.push({
+            Amount: parseFloat((unitPrice * qty).toFixed(2)),
+            DetailType: 'SalesItemLineDetail',
+            SalesItemLineDetail: {
+              ItemRef: line.SalesItemLineDetail.ItemRef,
+              Qty: qty,
+              UnitPrice: unitPrice
+            }
+          });
+        }
+
+        if (updatedLineItems.length === 0) {
+          console.warn('⚠️ No matching products found to update invoice');
+          continue;
+        }
+
+        try {
+          await axios.post(`${apiBase}/v3/company/${realmId}/invoice?operation=update`, {
+            Id: invoice.Invoice.Id,
+            SyncToken: invoice.Invoice.SyncToken,
+            Line: updatedLineItems
+          }, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              Accept: 'application/json',
+              'Content-Type': 'application/json'
+            }
+          });
+          console.log('✅ Invoice updated with quote prices');
+        } catch (err) {
+          console.error('❌ Failed to update invoice:', err.response?.data || err.message);
+        }
+      }
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('❌ Failed to handle invoice event:', err.response?.data || err.message);
+    res.status(500).send('Webhook failed');
+  }
+});
+
+app.get('/', (req, res) => {
+  res.send('QBO Webhook App is running');
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`🚀 Server listening on port ${PORT}`);
+});
+
+app.post('/api/quotes', async (req, res) => {
+  const { customerName, customerEmail, siteAddress, date, products } = req.body;
+
+  try {
+    const db = await connectToMongo();
+
+    let customer = await db.collection('customers').findOne({ email: customerEmail });
+    if (!customer) {
+      const result = await db.collection('customers').insertOne({ name: customerName, email: customerEmail });
+      customer = { _id: result.insertedId, name: customerName, email: customerEmail };
+    }
+
+    let site = await db.collection('sites').findOne({ customerId: customer._id, address: siteAddress });
+    if (!site) {
+      const result = await db.collection('sites').insertOne({ customerId: customer._id, address: siteAddress });
+      site = { _id: result.insertedId, customerId: customer._id, address: siteAddress };
+    }
+
+    await db.collection('quotes').insertOne({
+      siteId: site._id,
+      date,
+      products
+    });
+
+    console.log(`✅ Quote stored for ${customerEmail} on ${date}`);
+    res.status(200).send('Quote saved');
+  } catch (err) {
+    console.error('❌ Quote saving failed:', err.message);
+    res.status(500).send('Failed to save quote');
+  }
+});
