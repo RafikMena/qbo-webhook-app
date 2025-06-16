@@ -202,31 +202,39 @@ app.post('/webhooks/qbo', async (req, res) => {
         console.log('✅ Matched quote:', JSON.stringify(quote, null, 2));
         // 👉 optional: enrich invoice, log, or create follow-up action
 
-        const updatedLineItems = [];
+       const updatedLineItems = [];
 
-        for (const line of invoice.Invoice.Line || []) {
-          const itemName = normalizeProductName(line?.SalesItemLineDetail?.ItemRef?.name || '');
-          const matched = quote.products.find(p => normalizeProductName(p.name) === itemName);
+      for (const line of invoice.Invoice.Line || []) {
+        const itemName = normalizeProductName(line?.SalesItemLineDetail?.ItemRef?.name || '');
+        const matched = quote.products.find(p => normalizeProductName(p.name) === itemName);
 
-          if (!matched) {
-            console.warn(`❌ No matching product for "${itemName}" in quote`);
-            continue;
-          }
-
-          const unitPrice = matched.price;
-          const qty = line.SalesItemLineDetail?.Qty || 1;
-
-          updatedLineItems.push({
-            Amount: parseFloat((unitPrice * qty).toFixed(2)),
-            DetailType: 'SalesItemLineDetail',
-            SalesItemLineDetail: {
-              ItemRef: line.SalesItemLineDetail.ItemRef,
-              Qty: qty,
-              UnitPrice: unitPrice
-            }
-          });
+        if (!matched) {
+          console.warn(`❌ No matching product for "${itemName}" in quote`);
+          continue;
         }
-        if (updatedLineItems.length > 0) {
+
+        const unitPrice = parseFloat(matched.price);
+        const qty = parseFloat(line?.SalesItemLineDetail?.Qty || 1);
+
+        if (isNaN(unitPrice) || isNaN(qty)) {
+          console.warn(`⚠️ Invalid unitPrice (${unitPrice}) or qty (${qty}) for "${itemName}"`);
+          continue;
+        }
+
+        const amount = parseFloat((unitPrice * qty).toFixed(2));
+
+        updatedLineItems.push({
+          Amount: amount,
+          DetailType: 'SalesItemLineDetail',
+          SalesItemLineDetail: {
+            ItemRef: line.SalesItemLineDetail.ItemRef,
+            Qty: qty,
+            UnitPrice: unitPrice
+          }
+        });
+      }
+
+      if (updatedLineItems.length > 0) {
         try {
           const patchResponse = await axios.post(
             `https://sandbox-quickbooks.api.intuit.com/v3/company/${realmId}/invoice?operation=update`,
@@ -236,16 +244,16 @@ app.post('/webhooks/qbo', async (req, res) => {
               Line: updatedLineItems
             },
             {
-                  headers: {
-          Authorization: `Bearer ${accessToken}`,
-          Accept: 'application/json',
-          'Content-Type': 'application/json'
-                  }
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                Accept: 'application/json',
+                'Content-Type': 'application/json'
+              }
             }
           );
           console.log('✅ Invoice updated with quote prices');
         } catch (err) {
-            console.error('❌ Failed to update invoice:', JSON.stringify(err.response?.data, null, 2) || err.message);
+          console.error('❌ Failed to update invoice:', JSON.stringify(err.response?.data, null, 2) || err.message);
         }
       } else {
         console.warn('⚠️ No matching products found to update invoice');
