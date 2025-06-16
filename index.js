@@ -53,6 +53,16 @@ function readTokens() {
 
 async function refreshTokens(refresh_token) {
   const basicAuth = Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64');
+      console.log('🔍 Sending token request with:', {
+        grant_type: 'authorization_code',
+        code: authCode,
+        redirect_uri: REDIRECT_URI
+      });
+
+      console.log('🧾 Headers:', {
+        Authorization: `Basic ${Buffer.from(`${CLIENT_ID}:${CLIENT_SECRET}`).toString('base64')}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      });
 
   const response = await axios.post(tokenUrl, querystring.stringify({
     grant_type: 'refresh_token',
@@ -111,6 +121,8 @@ app.get('/callback', async (req, res) => {
 
 // Webhook for QuickBooks invoice creation
 app.post('/webhooks/qbo', async (req, res) => {
+  console.log('📩 Raw headers:', req.headers);
+  console.log('📩 Raw body:', JSON.stringify(req.body, null, 2));
   console.log('✅ Webhook received:', JSON.stringify(req.body, null, 2));
   let { access_token: accessToken, refresh_token, realmId } = readTokens();
 
